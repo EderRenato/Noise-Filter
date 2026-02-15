@@ -76,7 +76,7 @@ Ao selecionar um áudio, o programa executa o seguinte fluxo:
 
 ## 🧑‍💻 Autores
 
-* **Eder Renato** - [ederrenatosccasar@gmail.com](mailto:ederrenatosccasar@gmail.com)
+* **Eder Renato** - [EderRenato](https://github.com/EderRenato)
 * **Keylla Kaylla**
 * **Luis Felipe**
 * **Instituição:** UFOB - Engenharia Elétrica.
