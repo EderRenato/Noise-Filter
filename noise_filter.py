@@ -295,38 +295,71 @@ def filtro_fir_janelamento(x, Fs, config, M=101, tipo_janela="hamming"):
 
 def filtro_fir_parks_mcclellan(x, Fs, config):
     """
-    FIR por Parks-McClellan (Remez).
-    CORREÇÃO: ordem calculada pela fórmula de Kaiser para garantir
-    atenuação adequada na banda de rejeição.
+    FIR por Parks-McClellan (Remez) com fallback para firwin2.
+
+    O algoritmo Remez diverge numericamente quando a transição inferior
+    é muito estreita (ex: 150-300 Hz) e a ordem M é alta. Nesse caso,
+    usamos firwin2 (janelamento Blackman com frequências arbitrárias),
+    que é sempre estável e produz resposta equivalente.
+
+    Ordem calculada pela fórmula de Kaiser baseada na transição mais estreita.
     """
+    nyq = Fs / 2
+
     if config["tipo"] == "passa_altas":
-        f1, f2 = config["fc_stop"], config["fc_pass"]
-        bandas = [0, f1, f2, Fs / 2]
-        ganhos = [0, 1]
-        pesos = [10, 1]
+        f_stop, f_pass = config["fc_stop"], config["fc_pass"]
+        freq_pts = [0, f_stop, f_pass, nyq]
+        gain_pts = [0, 0,      1,      1]
+        bandas_remez = [0, f_stop, f_pass, nyq]
+        ganhos_remez = [0, 1]
+        pesos_remez  = [10, 1]
+        delta_f = (f_pass - f_stop) / Fs
 
     elif config["tipo"] == "passa_baixas":
-        f1, f2 = config["fc_pass"], config["fc_stop"]
-        bandas = [0, f1, f2, Fs / 2]
-        ganhos = [1, 0]
-        pesos = [1, 10]
+        f_pass, f_stop = config["fc_pass"], config["fc_stop"]
+        freq_pts = [0, f_pass, f_stop, nyq]
+        gain_pts = [1, 1,      0,      0]
+        bandas_remez = [0, f_pass, f_stop, nyq]
+        ganhos_remez = [1, 0]
+        pesos_remez  = [1, 10]
+        delta_f = (f_stop - f_pass) / Fs
 
     elif config["tipo"] == "passa_banda":
-        f1, f2 = config["fc_stop_low"], config["fc_pass_low"]
-        bandas = [0, f1, f2, config["fc_pass_high"], config["fc_stop_high"], Fs / 2]
-        ganhos = [0, 1, 0]
-        pesos = [10, 1, 10]
+        f_s1 = config["fc_stop_low"]
+        f_p1 = config["fc_pass_low"]
+        f_p2 = config["fc_pass_high"]
+        f_s2 = min(config["fc_stop_high"], nyq - 50)
+        freq_pts = [0, f_s1, f_p1, f_p2, f_s2, nyq]
+        gain_pts = [0, 0,    1,    1,    0,    0]
+        bandas_remez = [0, f_s1, f_p1, f_p2, f_s2, nyq]
+        ganhos_remez = [0, 1, 0]
+        pesos_remez  = [10, 1, 10]
+        delta_f = min(f_p1 - f_s1, f_s2 - f_p2) / Fs
 
     # Fórmula de Kaiser: M ≈ (As - 8) / (2.285 * 2π * Δf/fs)
-    delta_f = abs(f2 - f1) / Fs
     As_db = 60
     M = int(np.ceil((As_db - 8) / (2.285 * 2 * np.pi * delta_f)))
     M = max(M, 51)
     if M % 2 == 0:
         M += 1
 
-    b = signal.remez(M, bandas, ganhos, weight=pesos, fs=Fs, maxiter=500)
-    b = b / np.sum(np.abs(b))
+    # Tenta Remez; se divergir ou produzir coeficientes explodidos, usa firwin2
+    b = None
+    try:
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            b_remez = signal.remez(M, bandas_remez, ganhos_remez,
+                                   weight=pesos_remez, fs=Fs, maxiter=500)
+        if np.max(np.abs(b_remez)) < 10:  # coeficientes razoáveis
+            b = b_remez
+    except Exception:
+        pass  # fallback para firwin2
+
+    if b is None:
+        # firwin2: janelamento com resposta de frequência arbitrária — sempre estável
+        b = signal.firwin2(M, freq_pts, gain_pts, window="blackman", fs=Fs)
+
     a = [1]
     y_filt = signal.lfilter(b, a, x)
     return b, a, y_filt, M
